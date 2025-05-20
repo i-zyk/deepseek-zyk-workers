@@ -13,17 +13,17 @@ const typeDefs = `
 const resolvers = {
   Query: {
     hello: () => 'Hello World!',
+    // OpenAI版本的resolver
     generateAIResponse: async (_, { prompt }, { env }) => {
       try {
-        // DeepSeek API调用
-        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`
+            'Authorization': `Bearer ${env.OPENAI_API_KEY}`
           },
           body: JSON.stringify({
-            model: "deepseek-chat",
+            model: "gpt-4",
             messages: [{ role: "user", content: prompt }],
             temperature: 0.7,
             max_tokens: 500
@@ -31,13 +31,13 @@ const resolvers = {
         });
         
         if (!response.ok) {
-          throw new Error(`DeepSeek API error: ${response.statusText}`);
+          throw new Error(`OpenAI API error: ${response.statusText}`);
         }
         
         const data = await response.json();
         return data.choices[0].message.content;
       } catch (error) {
-        console.error('Error calling DeepSeek API:', error);
+        console.error('Error calling OpenAI API:', error);
         return `Error: ${error.message}`;
       }
     }
