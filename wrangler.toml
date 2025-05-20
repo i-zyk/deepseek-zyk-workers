@@ -1,0 +1,25 @@
+name = "ai-graphql-worker"
+main = "src/index.ts"
+compatibility_date = "2023-05-20"
+
+# 环境变量配置
+[vars]
+# 设置在本地开发时使用的默认变量
+# 实际的API密钥应通过Cloudflare Dashboard或CLI添加，而不是在此文件中
+
+# 路由配置示例（取消注释并修改以配置自定义域路由）
+# routes = [
+#   { pattern = "ai-api.your-domain.com", custom_domain = true }
+# ]
+
+# KV命名空间配置（可选）
+# [[kv_namespaces]]
+# binding = "AI_CACHE"
+# id = "your-kv-namespace-id"
+
+# 定义不同的环境配置
+[env.production]
+# 生产环境的特定配置
+
+[env.staging]
+# 测试环境的特定配置
