@@ -1,56 +1,74 @@
-// src/index.ts - OpenAI版本
+// src/index-graphql.ts - 完整的GraphQL Worker实现
 
 export interface Env {
   OPENAI_API_KEY: string;
 }
 
-export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    // 处理CORS预检请求
-    if (request.method === 'OPTIONS') {
-      return handleCORS();
-    }
-    
-    // 设置CORS并处理请求
-    if (request.method === 'POST') {
-      const corsHeaders = {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+// 简单的GraphQL解析器，不依赖外部库
+class GraphQLHandler {
+  private resolvers: any;
+
+  constructor(resolvers: any) {
+    this.resolvers = resolvers;
+  }
+
+  async execute(query: string, variables: any = {}, context: any = {}) {
+    try {
+      // 简单的GraphQL查询解析
+      if (query.includes('generateAIResponse')) {
+        const promptMatch = query.match(/prompt:\s*\$(\w+)/);
+        const promptVar = promptMatch ? promptMatch[1] : 'prompt';
+        const prompt = variables[promptVar];
+
+        if (!prompt) {
+          return {
+            errors: [{ message: 'Missing required variable: prompt' }]
+          };
+        }
+
+        const result = await this.resolvers.Query.generateAIResponse(null, { prompt }, context);
+        return {
+          data: {
+            generateAIResponse: result
+          }
+        };
+      }
+
+      if (query.includes('hello')) {
+        const result = await this.resolvers.Query.hello();
+        return {
+          data: {
+            hello: result
+          }
+        };
+      }
+
+      return {
+        errors: [{ message: 'Unknown query' }]
       };
-      
+    } catch (error) {
+      return {
+        errors: [{ message: error.message }]
+      };
+    }
+  }
+}
+
+// GraphQL resolvers
+const resolvers = {
+  Query: {
+    hello: () => 'Hello World!',
+    generateAIResponse: async (parent: any, args: any, context: any) => {
+      const { prompt } = args;
+      const { env } = context;
+
+      if (!env.OPENAI_API_KEY) {
+        throw new Error('OpenAI API key is not configured');
+      }
+
       try {
-        // 解析请求数据
-        const requestData = await request.json();
+        console.log('Calling OpenAI API...');
         
-        // 检查必要参数
-        if (!requestData.prompt) {
-          return new Response(JSON.stringify({ error: 'Missing required parameter: prompt' }), { 
-            status: 400,
-            headers: { 
-              'Content-Type': 'application/json',
-              ...corsHeaders
-            }
-          });
-        }
-        
-        // 检查API密钥存在
-        if (!env.OPENAI_API_KEY) {
-          console.error('API key is missing');
-          return new Response(JSON.stringify({ 
-            error: 'Configuration error: API key is missing' 
-          }), { 
-            status: 500,
-            headers: { 
-              'Content-Type': 'application/json',
-              ...corsHeaders
-            }
-          });
-        }
-        
-        console.log('Calling OpenAI API with key:', env.OPENAI_API_KEY.substring(0, 3) + '...');
-        
-        // 准备调用OpenAI API
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -58,53 +76,115 @@ export default {
             'Authorization': `Bearer ${env.OPENAI_API_KEY}`
           },
           body: JSON.stringify({
-            model: requestData.model || "gpt-3.5-turbo",
-            messages: [
-              { 
-                role: "user", 
-                content: requestData.prompt 
-              }
-            ],
-            temperature: requestData.temperature || 0.7,
-            max_tokens: requestData.max_tokens || 500
+            model: "gpt-3.5-turbo",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.7,
+            max_tokens: 500
           })
         });
-        
-        // 处理API响应
+
         if (!response.ok) {
-          const errorData = await response.text();
-          console.error('OpenAI API Error:', response.status, errorData);
-          
-          return new Response(JSON.stringify({ 
-            error: `OpenAI API error: ${response.status} ${response.statusText}`,
-            details: errorData
-          }), { 
-            status: 502,
+          const errorText = await response.text();
+          console.error('OpenAI API Error:', response.status, errorText);
+          throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content;
+      } catch (error) {
+        console.error('Error calling OpenAI API:', error);
+        throw new Error(`AI API Error: ${error.message}`);
+      }
+    }
+  }
+};
+
+const graphqlHandler = new GraphQLHandler(resolvers);
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // 处理CORS预检请求
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+          'Access-Control-Max-Age': '86400'
+        }
+      });
+    }
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    };
+
+    // 健康检查
+    if (request.method === 'GET') {
+      return new Response(JSON.stringify({ 
+        status: 'healthy',
+        type: 'GraphQL API',
+        endpoints: {
+          graphql: 'POST /',
+          health: 'GET /'
+        }
+      }), {
+        headers: { 
+          'Content-Type': 'application/json',
+          ...corsHeaders
+        }
+      });
+    }
+
+    // 处理GraphQL POST请求
+    if (request.method === 'POST') {
+      try {
+        const contentType = request.headers.get('content-type') || '';
+        
+        if (!contentType.includes('application/json')) {
+          return new Response(JSON.stringify({
+            errors: [{ message: 'Content-Type must be application/json' }]
+          }), {
+            status: 400,
             headers: { 
               'Content-Type': 'application/json',
               ...corsHeaders
             }
           });
         }
-        
-        // 返回成功响应
-        const data = await response.json();
-        return new Response(JSON.stringify({
-          text: data.choices[0].message.content,
-          raw: data
-        }), { 
+
+        const body = await request.json();
+        const { query, variables = {} } = body;
+
+        if (!query) {
+          return new Response(JSON.stringify({
+            errors: [{ message: 'Missing GraphQL query' }]
+          }), {
+            status: 400,
+            headers: { 
+              'Content-Type': 'application/json',
+              ...corsHeaders
+            }
+          });
+        }
+
+        // 执行GraphQL查询
+        const result = await graphqlHandler.execute(query, variables, { env });
+
+        return new Response(JSON.stringify(result), {
           headers: { 
             'Content-Type': 'application/json',
             ...corsHeaders
           }
         });
       } catch (error) {
-        console.error('Worker Error:', error);
+        console.error('GraphQL execution error:', error);
         
-        return new Response(JSON.stringify({ 
-          error: 'Internal server error',
-          message: error.message 
-        }), { 
+        return new Response(JSON.stringify({
+          errors: [{ message: 'Internal server error', details: error.message }]
+        }), {
           status: 500,
           headers: { 
             'Content-Type': 'application/json',
@@ -113,33 +193,10 @@ export default {
         });
       }
     }
-    
-    // 对于GET请求，返回简单的健康检查
-    if (request.method === 'GET') {
-      return new Response(JSON.stringify({ 
-        status: 'healthy',
-        apiKeyConfigured: Boolean(env.OPENAI_API_KEY)
-      }), {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
-    }
-    
-    // 其他请求方法返回404
-    return new Response('Not Found', { status: 404 });
+
+    return new Response('Method not allowed', { 
+      status: 405,
+      headers: corsHeaders
+    });
   }
 };
-
-// 处理CORS预检请求
-function handleCORS() {
-  return new Response(null, {
-    headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Access-Control-Max-Age': '86400'
-    }
-  });
-}
